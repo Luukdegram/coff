@@ -40,10 +40,54 @@ const SectionHeader = struct {
     number_of_relocations: u16,
     number_of_line_numbers: u16,
     characteristics: u32,
+
+    /// Returns the alignment for the section in bytes
+    fn alignment(header: SectionHeader) u32 {
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_1BYTES != 0) return 1;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_2BYTES != 0) return 2;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_4BYTES != 0) return 4;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_8BYTES != 0) return 8;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_16BYTES != 0) return 16;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_32BYTES != 0) return 32;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_64BYTES != 0) return 64;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_128BYTES != 0) return 128;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_256BYTES != 0) return 256;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_512BYTES != 0) return 512;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_1024BYTES != 0) return 1024;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_2048BYTES != 0) return 2048;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_4096BYTES != 0) return 4096;
+        if (header.characteristics & flags.IMAGE_SCN_ALIGN_8192BYTES != 0) return 8192;
+        unreachable;
+    }
+
+    const flags = struct {
+        const IMAGE_SCN_ALIGN_1BYTES: u32 = 0x00100000;
+        const IMAGE_SCN_ALIGN_2BYTES: u32 = 0x00200000;
+        const IMAGE_SCN_ALIGN_4BYTES: u32 = 0x00300000;
+        const IMAGE_SCN_ALIGN_8BYTES: u32 = 0x00400000;
+        const IMAGE_SCN_ALIGN_16BYTES: u32 = 0x00500000;
+        const IMAGE_SCN_ALIGN_32BYTES: u32 = 0x00600000;
+        const IMAGE_SCN_ALIGN_64BYTES: u32 = 0x00700000;
+        const IMAGE_SCN_ALIGN_128BYTES: u32 = 0x00800000;
+        const IMAGE_SCN_ALIGN_256BYTES: u32 = 0x00900000;
+        const IMAGE_SCN_ALIGN_512BYTES: u32 = 0x00A00000;
+        const IMAGE_SCN_ALIGN_1024BYTES: u32 = 0x00B00000;
+        const IMAGE_SCN_ALIGN_2048BYTES: u32 = 0x00C00000;
+        const IMAGE_SCN_ALIGN_4096BYTES: u32 = 0x00D00000;
+        const IMAGE_SCN_ALIGN_8192BYTES: u32 = 0x00E00000;
+    };
+
+    /// When a section name contains the symbol `$`, it is considered
+    /// a grouped section. e.g. a section named `.text$X` contributes
+    /// to the `.text` section within the image.
+    /// The character after the dollar sign, indicates the order when
+    /// multiple (same prefix) sections were found.
+    fn isGrouped(header: SectionHeader) bool {
+        return std.mem.indexOfScalar(u8, &header.name, '$') != null;
+    }
 };
 
-/// Initializes a new `Coff` instance. The file will not be
-/// parsed yet.
+/// Initializes a new `Coff` instance. The file will not be parsed yet.
 pub fn init(allocator: Allocator, file: std.fs.File, path: []const u8) Coff {
     return .{
         .allocator = allocator,
@@ -53,8 +97,7 @@ pub fn init(allocator: Allocator, file: std.fs.File, path: []const u8) Coff {
     };
 }
 
-/// Frees all resources of the `Coff` file. This does
-/// not close the file handle.
+/// Frees all resources of the `Coff` file. This does not close the file handle.
 pub fn deinit(coff: *Coff) void {
     const gpa = coff.allocator;
     coff.section_table.deinit(gpa);
