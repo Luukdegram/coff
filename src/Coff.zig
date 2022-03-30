@@ -15,6 +15,8 @@ header: Header,
 section_table: std.ArrayListUnmanaged(SectionHeader) = .{},
 sections: std.ArrayListUnmanaged(Section) = .{},
 relocations: std.AutoArrayHashMapUnmanaged(u16, []const Relocation) = .{},
+symbols: std.ArrayListUnmanaged(Symbol) = .{},
+string_table: []const u8,
 
 const Header = struct {
     machine: std.coff.MachineType,
@@ -45,8 +47,136 @@ const Relocation = struct {
     tag: u16,
 };
 
+const Symbol = struct {
+    name: [8]u8,
+    value: u32,
+    section_number: i16,
+    sym_type: u16,
+    storage_class: Class,
+    number_aux_symbols: u8,
+
+    fn getName(symbol: Symbol, coff: *const Coff) []const u8 {
+        if (std.mem.eql(u8, symbol.name[0..4], &.{ 0, 0, 0, 0 })) {
+            const offset = std.mem.readIntLittle(u32, symbol.name[4..8]);
+            return coff.getString(offset);
+        }
+        return std.mem.sliceTo(&symbol.name, 0);
+    }
+
+    fn complexType(symbol: Symbol) ComplexType {
+        return @intToEnum(ComplexType, @truncate(u8, symbol.sym_type >> 4));
+    }
+
+    fn baseType(symbol: Symbol) BaseType {
+        return @intToEnum(BaseType, @truncate(u8, symbol.sym_type >> 8));
+    }
+
+    const ComplexType = enum(u8) {
+        ///No derived type; the symbol is a simple scalar variable.
+        IMAGE_SYM_DTYPE_NULL = 0,
+        ///The symbol is a pointer to base type.
+        IMAGE_SYM_DTYPE_POINTER = 1,
+        ///The symbol is a function that returns a base type.
+        IMAGE_SYM_DTYPE_FUNCTION = 2,
+        ///The symbol is an array of base type.
+        IMAGE_SYM_DTYPE_ARRAY = 3,
+    };
+
+    const BaseType = enum(u8) {
+        ///No type information or unknown base type. Microsoft tools use this setting
+        IMAGE_SYM_TYPE_NULL = 0,
+        ///No valid type; used with void pointers and functions
+        IMAGE_SYM_TYPE_VOID = 1,
+        ///A character (signed byte)
+        IMAGE_SYM_TYPE_CHAR = 2,
+        ///A 2-byte signed integer
+        IMAGE_SYM_TYPE_SHORT = 3,
+        ///A natural integer type (normally 4 bytes in Windows)
+        IMAGE_SYM_TYPE_INT = 4,
+        ///A 4-byte signed integer
+        IMAGE_SYM_TYPE_LONG = 5,
+        ///A 4-byte floating-point number
+        IMAGE_SYM_TYPE_FLOAT = 6,
+        ///An 8-byte floating-point number
+        IMAGE_SYM_TYPE_DOUBLE = 7,
+        ///A structure
+        IMAGE_SYM_TYPE_STRUCT = 8,
+        ///A union
+        IMAGE_SYM_TYPE_UNION = 9,
+        ///An enumerated type
+        IMAGE_SYM_TYPE_ENUM = 10,
+        ///A member of enumeration (a specific value)
+        IMAGE_SYM_TYPE_MOE = 11,
+        ///A byte; unsigned 1-byte integer
+        IMAGE_SYM_TYPE_BYTE = 12,
+        ///A word; unsigned 2-byte integer
+        IMAGE_SYM_TYPE_WORD = 13,
+        ///An unsigned integer of natural size (normally, 4 bytes)
+        IMAGE_SYM_TYPE_UINT = 14,
+        ///An unsigned 4-byte integer
+        IMAGE_SYM_TYPE_DWORD = 15,
+    };
+
+    const Class = enum(u8) {
+        ///No assigned storage class.
+        IMAGE_SYM_CLASS_NULL = 0,
+        ///The automatic (stack) variable. The Value field specifies the stack frame offset.
+        IMAGE_SYM_CLASS_AUTOMATIC = 1,
+        ///A value that Microsoft tools use for external symbols. The Value field indicates the size if the section number is IMAGE_SYM_UNDEFINED (0). If the section number is not zero, then the Value field specifies the offset within the section.
+        IMAGE_SYM_CLASS_EXTERNAL = 2,
+        ///The offset of the symbol within the section. If the Value field is zero, then the symbol represents a section name.
+        IMAGE_SYM_CLASS_STATIC = 3,
+        ///A register variable. The Value field specifies the register number.
+        IMAGE_SYM_CLASS_REGISTER = 4,
+        ///A symbol that is defined externally.
+        IMAGE_SYM_CLASS_EXTERNAL_DEF = 5,
+        ///A code label that is defined within the module. The Value field specifies the offset of the symbol within the section.
+        IMAGE_SYM_CLASS_LABEL = 6,
+        ///A reference to a code label that is not defined.
+        IMAGE_SYM_CLASS_UNDEFINED_LABEL = 7,
+        ///The structure member. The Value field specifies the n th member.
+        IMAGE_SYM_CLASS_MEMBER_OF_STRUCT = 8,
+        ///A formal argument (parameter) of a function. The Value field specifies the n th argument.
+        IMAGE_SYM_CLASS_ARGUMENT = 9,
+        ///The structure tag-name entry.
+        IMAGE_SYM_CLASS_STRUCT_TAG = 10,
+        ///A union member. The Value field specifies the n th member.
+        IMAGE_SYM_CLASS_MEMBER_OF_UNION = 11,
+        ///The Union tag-name entry.
+        IMAGE_SYM_CLASS_UNION_TAG = 12,
+        ///A Typedef entry.
+        IMAGE_SYM_CLASS_TYPE_DEFINITION = 13,
+        ///A static data declaration.
+        IMAGE_SYM_CLASS_UNDEFINED_STATIC = 14,
+        ///An enumerated type tagname entry.
+        IMAGE_SYM_CLASS_ENUM_TAG = 15,
+        ///A member of an enumeration. The Value field specifies the n th member.
+        IMAGE_SYM_CLASS_MEMBER_OF_ENUM = 16,
+        ///A register parameter.
+        IMAGE_SYM_CLASS_REGISTER_PARAM = 17,
+        ///A bit-field reference. The Value field specifies the n th bit in the bit field.
+        IMAGE_SYM_CLASS_BIT_FIELD = 18,
+        ///A .bb (beginning of block) or .eb (end of block) record. The Value field is the relocatable address of the code location.
+        IMAGE_SYM_CLASS_BLOCK = 100,
+        ///A value that Microsoft tools use for symbol records that define the extent of a function: begin function (.bf ), end function ( .ef ), and lines in function ( .lf ). For .lf records, the Value field gives the number of source lines in the function. For .ef records, the Value field gives the size of the function code.
+        IMAGE_SYM_CLASS_FUNCTION = 101,
+        ///An end-of-structure entry.
+        IMAGE_SYM_CLASS_END_OF_STRUCT = 102,
+        ///A value that Microsoft tools, as well as traditional COFF format, use for the source-file symbol record. The symbol is followed by auxiliary records that name the file.
+        IMAGE_SYM_CLASS_FILE = 103,
+        ///A definition of a section (Microsoft tools use STATIC storage class instead).
+        IMAGE_SYM_CLASS_SECTION = 104,
+        ///A weak external. For more information, see Auxiliary Format 3: Weak Externals.
+        IMAGE_SYM_CLASS_WEAK_EXTERNAL = 105,
+        ///A CLR token symbol. The name is an ASCII string that consists of the hexadecimal value of the token. For more information, see CLR Token Definition (Object Only).
+        IMAGE_SYM_CLASS_CLR_TOKEN = 107,
+        //A special symbol that represents the end of function, for debugging purposes.
+        IMAGE_SYM_CLASS_END_OF_FUNCTION = 0xFF,
+    };
+};
+
 const SectionHeader = struct {
-    name: [32]u8,
+    name: [8]u8,
     virtual_size: u32,
     virtual_address: u32,
     size_of_raw_data: u32,
@@ -56,6 +186,18 @@ const SectionHeader = struct {
     number_of_relocations: u16,
     number_of_line_numbers: u16,
     characteristics: u32,
+
+    fn getName(header: SectionHeader, coff: *const Coff) []const u8 {
+        // when name starts with a slash '/', the name of the section
+        // contains a long name. The following bytes contain the offset into
+        // the string table
+        if (header.name[0] == '/') {
+            const offset_len = std.mem.indexOfScalar(u8, header.name[1..], 0) orelse 7;
+            const offset = try std.fmt.parseInt(u32, header.name[1..][0..offset_len], 10);
+            return coff.getString(offset);
+        }
+        return std.mem.sliceTo(&header.name, 0);
+    }
 
     /// Returns the alignment for the section in bytes
     fn alignment(header: SectionHeader) u32 {
@@ -110,6 +252,7 @@ pub fn init(allocator: Allocator, file: std.fs.File, path: []const u8) Coff {
         .file = file,
         .name = path,
         .header = undefined,
+        .string_table = undefined,
     };
 }
 
@@ -153,9 +296,28 @@ pub fn parse(coff: *Coff) !void {
         try coff.file.seekBy(@intCast(i64, coff.header.size_of_optional_header));
     }
 
+    try parseStringTable(coff);
     try parseSectionTable(coff);
     try parseSectionData(coff);
     try parseRelocations(coff);
+    try parseSymbolTable(coff);
+}
+
+fn parseStringTable(coff: *Coff) !void {
+    const reader = coff.file.reader();
+    const current_pos = try coff.file.getPos();
+    try coff.file.seekTo(coff.stringTableOffset());
+    const size = try reader.readIntLittle(u32);
+    const buffer = try coff.allocator.alloc(u8, size - 4); // account for 4 bytes of size field itself
+    errdefer coff.allocator.free(buffer);
+    try reader.readNoEof(buffer);
+    coff.string_table = buffer;
+    try coff.file.seekTo(current_pos);
+}
+
+fn getString(coff: *const Coff, offset: u32) []const u8 {
+    const str = @ptrCast([*:0]const u8, coff.string_table.ptr + offset);
+    return std.mem.sliceTo(str, 0);
 }
 
 fn parseSectionTable(coff: *Coff) !void {
@@ -167,21 +329,8 @@ fn parseSectionTable(coff: *Coff) !void {
     while (index < coff.header.number_of_sections) : (index += 1) {
         const sec_header = coff.section_table.addOneAssumeCapacity();
 
-        var name: [32]u8 = undefined;
-        try reader.readNoEof(name[0..8]);
-        // when name starts with a slash '/', the name of the section
-        // contains a long name. The following bytes contain the offset into
-        // the string table
-        if (name[0] == '/') {
-            const offset_len = std.mem.indexOfScalar(u8, name[1..], 0) orelse 7;
-            const offset = try std.fmt.parseInt(u32, name[1..][0..offset_len], 10);
-            const str_len = try parseStringFromOffset(coff, offset, &name);
-            std.mem.set(u8, name[str_len..], 0);
-        } else {
-            // name is only 8 bytes long, so set all other characters to 0.
-            std.mem.set(u8, name[8..], 0);
-        }
-
+        var name: [8]u8 = undefined;
+        try reader.readNoEof(&name);
         sec_header.* = .{
             .name = name,
             .virtual_size = try reader.readIntLittle(u32),
@@ -254,5 +403,28 @@ fn parseRelocations(coff: *Coff) !void {
         }
 
         try coff.relocations.putNoClobber(coff.allocator, sec_index, relocations);
+    }
+}
+
+fn parseSymbolTable(coff: *Coff) !void {
+    if (coff.header.number_of_symbols == 0) return;
+
+    try coff.symbols.ensureUnusedCapacity(coff.allocator, coff.header.number_of_symbols);
+    try coff.file.seekTo(coff.header.pointer_to_symbol_table);
+    const reader = coff.file.reader();
+
+    var index: u32 = 0;
+    while (index < coff.header.number_of_symbols) : (index += 1) {
+        var name: [8]u8 = undefined;
+        try reader.readNoEof(&name);
+        const sym: Symbol = .{
+            .name = name,
+            .value = try reader.readIntLittle(u32),
+            .section_number = try reader.readIntLittle(i16),
+            .sym_type = try reader.readIntLittle(u16),
+            .storage_class = @intToEnum(Symbol.Class, try reader.readByte()),
+            .number_aux_symbols = try reader.readByte(),
+        };
+        coff.symbols.appendAssumeCapacity(sym);
     }
 }
