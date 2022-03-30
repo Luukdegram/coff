@@ -13,6 +13,8 @@ name: []const u8,
 
 header: Header,
 section_table: std.ArrayListUnmanaged(SectionHeader) = .{},
+sections: std.ArrayListUnmanaged(Section) = .{},
+relocations: std.AutoArrayHashMapUnmanaged(u16, []const Relocation) = .{},
 
 const Header = struct {
     machine: std.coff.MachineType,
@@ -24,14 +26,28 @@ const Header = struct {
     characteristics: u16,
 };
 
-const SectionHeader = struct {
-    const Misc = union {
-        physical_address: u32,
-        virtual_size: u32,
-    };
+const Section = struct {
+    ptr: [*]const u8,
+    size: u32,
 
+    fn slice(section: Section) []const u8 {
+        return section.ptr[0..section.size];
+    }
+
+    fn fromSlice(buf: []const u8) Section {
+        return .{ .ptr = buf.ptr, .size = @intCast(u32, buf.len) };
+    }
+};
+
+const Relocation = struct {
+    virtual_address: u32,
+    symbol_table_index: u32,
+    tag: u16,
+};
+
+const SectionHeader = struct {
     name: [32]u8,
-    misc: Misc,
+    virtual_size: u32,
     virtual_address: u32,
     size_of_raw_data: u32,
     pointer_to_raw_data: u32,
@@ -101,6 +117,14 @@ pub fn init(allocator: Allocator, file: std.fs.File, path: []const u8) Coff {
 pub fn deinit(coff: *Coff) void {
     const gpa = coff.allocator;
     coff.section_table.deinit(gpa);
+    for (coff.sections.items) |section, sec_index| {
+        gpa.free(section.slice());
+        if (coff.relocations.get(@intCast(u16, sec_index))) |relocs| {
+            gpa.free(relocs);
+        }
+    }
+    coff.sections.deinit(gpa);
+    coff.relocations.deinit(gpa);
     coff.* = undefined;
 }
 
@@ -130,11 +154,14 @@ pub fn parse(coff: *Coff) !void {
     }
 
     try parseSectionTable(coff);
+    try parseSectionData(coff);
+    try parseRelocations(coff);
 }
 
 fn parseSectionTable(coff: *Coff) !void {
-    const reader = coff.file.reader();
+    if (coff.header.number_of_sections == 0) return;
     try coff.section_table.ensureUnusedCapacity(coff.allocator, coff.header.number_of_sections);
+    const reader = coff.file.reader();
 
     var index: u16 = 0;
     while (index < coff.header.number_of_sections) : (index += 1) {
@@ -157,7 +184,7 @@ fn parseSectionTable(coff: *Coff) !void {
 
         sec_header.* = .{
             .name = name,
-            .misc = .{ .virtual_size = try reader.readIntLittle(u32) },
+            .virtual_size = try reader.readIntLittle(u32),
             .virtual_address = try reader.readIntLittle(u32),
             .size_of_raw_data = try reader.readIntLittle(u32),
             .pointer_to_raw_data = try reader.readIntLittle(u32),
@@ -169,8 +196,8 @@ fn parseSectionTable(coff: *Coff) !void {
         };
 
         log.debug("Parsed section header: '{s}'", .{std.mem.sliceTo(&name, 0)});
-        if (sec_header.misc.virtual_size != 0) {
-            log.err("Invalid object file. Expected virtual size '0' but found '{d}'", .{sec_header.misc.virtual_size});
+        if (sec_header.virtual_size != 0) {
+            log.err("Invalid object file. Expected virtual size '0' but found '{d}'", .{sec_header.virtual_size});
             return error.InvalidVirtualSize;
         }
     }
@@ -190,4 +217,42 @@ fn parseStringFromOffset(coff: *Coff, offset: u32, buf: []u8) !usize {
     const str = (try coff.file.reader().readUntilDelimiterOrEof(buf, 0)) orelse "";
     try coff.file.seekTo(current_pos);
     return str.len;
+}
+
+/// Parses all section data of the coff file.
+/// Asserts section headers are known.
+fn parseSectionData(coff: *Coff) !void {
+    if (coff.header.number_of_sections == 0) return;
+    std.debug.assert(coff.section_table.items.len == coff.header.number_of_sections);
+    try coff.sections.ensureUnusedCapacity(coff.allocator, coff.header.number_of_sections);
+    const reader = coff.file.reader();
+    for (coff.section_table.items) |sec_header| {
+        try coff.file.seekTo(sec_header.pointer_to_raw_data);
+        const buf = try coff.allocator.alloc(u8, sec_header.virtual_size);
+        try reader.readNoEof(buf);
+        coff.sections.appendAssumeCapacity(Section.fromSlice(buf));
+    }
+}
+
+fn parseRelocations(coff: *Coff) !void {
+    if (coff.header.number_of_sections == 0) return;
+    const reader = coff.file.reader();
+    for (coff.section_table.items) |sec_header, index| {
+        if (sec_header.number_of_relocations == 0) continue;
+        const sec_index = @intCast(u16, index);
+
+        const relocations = try coff.allocator.alloc(Relocation, sec_header.number_of_relocations);
+        errdefer coff.allocator.free(relocations);
+
+        try coff.file.seekTo(sec_header.pointer_to_relocations);
+        for (relocations) |*reloc| {
+            reloc.* = .{
+                .virtual_address = try reader.readIntLittle(u32),
+                .symbol_table_index = try reader.readIntLittle(u32),
+                .tag = try reader.readIntLittle(u16),
+            };
+        }
+
+        try coff.relocations.putNoClobber(coff.allocator, sec_index, relocations);
+    }
 }
