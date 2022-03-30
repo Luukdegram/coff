@@ -18,7 +18,7 @@ relocations: std.AutoArrayHashMapUnmanaged(u16, []const Relocation) = .{},
 symbols: std.ArrayListUnmanaged(Symbol) = .{},
 string_table: []const u8,
 
-const Header = struct {
+pub const Header = struct {
     machine: std.coff.MachineType,
     number_of_sections: u16,
     timedate_stamp: u32,
@@ -28,7 +28,7 @@ const Header = struct {
     characteristics: u16,
 };
 
-const Section = struct {
+pub const Section = struct {
     ptr: [*]const u8,
     size: u32,
 
@@ -41,13 +41,13 @@ const Section = struct {
     }
 };
 
-const Relocation = struct {
+pub const Relocation = struct {
     virtual_address: u32,
     symbol_table_index: u32,
     tag: u16,
 };
 
-const Symbol = struct {
+pub const Symbol = struct {
     name: [8]u8,
     value: u32,
     section_number: i16,
@@ -55,7 +55,7 @@ const Symbol = struct {
     storage_class: Class,
     number_aux_symbols: u8,
 
-    fn getName(symbol: Symbol, coff: *const Coff) []const u8 {
+    pub fn getName(symbol: Symbol, coff: *const Coff) []const u8 {
         if (std.mem.eql(u8, symbol.name[0..4], &.{ 0, 0, 0, 0 })) {
             const offset = std.mem.readIntLittle(u32, symbol.name[4..8]);
             return coff.getString(offset);
@@ -63,11 +63,11 @@ const Symbol = struct {
         return std.mem.sliceTo(&symbol.name, 0);
     }
 
-    fn complexType(symbol: Symbol) ComplexType {
+    pub fn complexType(symbol: Symbol) ComplexType {
         return @intToEnum(ComplexType, @truncate(u8, symbol.sym_type >> 4));
     }
 
-    fn baseType(symbol: Symbol) BaseType {
+    pub fn baseType(symbol: Symbol) BaseType {
         return @intToEnum(BaseType, @truncate(u8, symbol.sym_type >> 8));
     }
 
@@ -82,7 +82,7 @@ const Symbol = struct {
         IMAGE_SYM_DTYPE_ARRAY = 3,
     };
 
-    const BaseType = enum(u8) {
+    pub const BaseType = enum(u8) {
         ///No type information or unknown base type. Microsoft tools use this setting
         IMAGE_SYM_TYPE_NULL = 0,
         ///No valid type; used with void pointers and functions
@@ -117,7 +117,7 @@ const Symbol = struct {
         IMAGE_SYM_TYPE_DWORD = 15,
     };
 
-    const Class = enum(u8) {
+    pub const Class = enum(u8) {
         ///No assigned storage class.
         IMAGE_SYM_CLASS_NULL = 0,
         ///The automatic (stack) variable. The Value field specifies the stack frame offset.
@@ -175,7 +175,7 @@ const Symbol = struct {
     };
 };
 
-const SectionHeader = struct {
+pub const SectionHeader = struct {
     name: [8]u8,
     virtual_size: u32,
     virtual_address: u32,
@@ -187,20 +187,20 @@ const SectionHeader = struct {
     number_of_line_numbers: u16,
     characteristics: u32,
 
-    fn getName(header: SectionHeader, coff: *const Coff) []const u8 {
+    pub fn getName(header: SectionHeader, coff: *const Coff) []const u8 {
         // when name starts with a slash '/', the name of the section
         // contains a long name. The following bytes contain the offset into
         // the string table
         if (header.name[0] == '/') {
             const offset_len = std.mem.indexOfScalar(u8, header.name[1..], 0) orelse 7;
-            const offset = try std.fmt.parseInt(u32, header.name[1..][0..offset_len], 10);
+            const offset = std.fmt.parseInt(u32, header.name[1..][0..offset_len], 10) catch return "";
             return coff.getString(offset);
         }
         return std.mem.sliceTo(&header.name, 0);
     }
 
     /// Returns the alignment for the section in bytes
-    fn alignment(header: SectionHeader) u32 {
+    pub fn alignment(header: SectionHeader) u32 {
         if (header.characteristics & flags.IMAGE_SCN_ALIGN_1BYTES != 0) return 1;
         if (header.characteristics & flags.IMAGE_SCN_ALIGN_2BYTES != 0) return 2;
         if (header.characteristics & flags.IMAGE_SCN_ALIGN_4BYTES != 0) return 4;
@@ -218,7 +218,7 @@ const SectionHeader = struct {
         unreachable;
     }
 
-    const flags = struct {
+    pub const flags = struct {
         const IMAGE_SCN_ALIGN_1BYTES: u32 = 0x00100000;
         const IMAGE_SCN_ALIGN_2BYTES: u32 = 0x00200000;
         const IMAGE_SCN_ALIGN_4BYTES: u32 = 0x00300000;
@@ -240,7 +240,7 @@ const SectionHeader = struct {
     /// to the `.text` section within the image.
     /// The character after the dollar sign, indicates the order when
     /// multiple (same prefix) sections were found.
-    fn isGrouped(header: SectionHeader) bool {
+    pub fn isGrouped(header: SectionHeader) bool {
         return std.mem.indexOfScalar(u8, &header.name, '$') != null;
     }
 };
@@ -425,6 +425,13 @@ fn parseSymbolTable(coff: *Coff) !void {
             .storage_class = @intToEnum(Symbol.Class, try reader.readByte()),
             .number_aux_symbols = try reader.readByte(),
         };
+        if (sym.number_aux_symbols > 0) {
+            index += sym.number_aux_symbols;
+            try reader.skipBytes(
+                18 * sym.number_aux_symbols,
+                .{ .buf_size = 90 }, // buf_size = sizeOf(5*Symbol)
+            );
+        }
         coff.symbols.appendAssumeCapacity(sym);
     }
 }
