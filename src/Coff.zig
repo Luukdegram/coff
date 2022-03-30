@@ -14,9 +14,12 @@ name: []const u8,
 header: Header,
 section_table: std.ArrayListUnmanaged(SectionHeader) = .{},
 sections: std.ArrayListUnmanaged(Section) = .{},
-relocations: std.AutoArrayHashMapUnmanaged(u16, []const Relocation) = .{},
+relocations: std.AutoHashMapUnmanaged(u16, []const Relocation) = .{},
 symbols: std.ArrayListUnmanaged(Symbol) = .{},
 string_table: []const u8,
+
+/// Maps original symbol index to their new index
+sym_map: std.AutoHashMapUnmanaged(u32, u32) = .{},
 
 pub const Header = struct {
     machine: std.coff.MachineType,
@@ -425,6 +428,15 @@ fn parseSymbolTable(coff: *Coff) !void {
             .storage_class = @intToEnum(Symbol.Class, try reader.readByte()),
             .number_aux_symbols = try reader.readByte(),
         };
+        try coff.sym_map.putNoClobber(coff.allocator, index, @intCast(u32, coff.symbols.items.len));
         coff.symbols.appendAssumeCapacity(sym);
+
+        if (sym.number_aux_symbols > 0) {
+            index += sym.number_aux_symbols;
+            try reader.skipBytes(
+                18 * sym.number_aux_symbols,
+                .{ .buf_size = 90 },
+            );
+        }
     }
 }

@@ -134,7 +134,6 @@ fn printSymtable(coff: Coff) !void {
             symbol.value,
             symbol.getName(&coff),
         });
-        index += symbol.number_aux_symbols; // skip auxiliary symbols
     }
 }
 
@@ -151,7 +150,7 @@ fn printRelocs(coff: Coff) !void {
                 section_header.getName(&coff),
                 relocation.virtual_address,
                 relocation.tag,
-                coff.symbols.items[relocation.symbol_table_index].getName(&coff),
+                coff.symbols.items[coff.sym_map.get(relocation.symbol_table_index).?].getName(&coff),
             });
         }
     }
