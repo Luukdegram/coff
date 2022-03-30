@@ -13,4 +13,5 @@ Options:
 -H, --help                         Print this help and exit
 -h, --headers                      Print the section headers of the object file
 -t, --syms                         Print the symbol table
+-r, --relocs                       Print all relocations
 ```

@@ -425,13 +425,6 @@ fn parseSymbolTable(coff: *Coff) !void {
             .storage_class = @intToEnum(Symbol.Class, try reader.readByte()),
             .number_aux_symbols = try reader.readByte(),
         };
-        if (sym.number_aux_symbols > 0) {
-            index += sym.number_aux_symbols;
-            try reader.skipBytes(
-                18 * sym.number_aux_symbols,
-                .{ .buf_size = 90 }, // buf_size = sizeOf(5*Symbol)
-            );
-        }
         coff.symbols.appendAssumeCapacity(sym);
     }
 }

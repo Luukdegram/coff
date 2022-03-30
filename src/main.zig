@@ -25,6 +25,7 @@ const usage =
     \\-H, --help                         Print this help and exit
     \\-h, --headers                      Print the section headers of the object file
     \\-t, --syms                         Print the symbol table
+    \\-r, --relocs                       Print all relocations
 ;
 
 pub fn main() !void {
@@ -49,6 +50,7 @@ pub fn main() !void {
 
     var display_headers: bool = false;
     var display_symtable: bool = false;
+    var display_relocations: bool = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -59,6 +61,8 @@ pub fn main() !void {
             display_symtable = true;
         } else if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--headers")) {
             display_headers = true;
+        } else if (mem.eql(u8, arg, "-r") or mem.eql(u8, arg, "--relocs")) {
+            display_relocations = true;
         } else if (mem.startsWith(u8, arg, "--")) {
             printErrorAndExit("Unknown argument '{s}'", .{arg});
         } else {
@@ -80,6 +84,7 @@ pub fn main() !void {
         try printDetails(coff);
         if (display_headers) try printHeaders(coff);
         if (display_symtable) try printSymtable(coff);
+        if (display_relocations) try printRelocs(coff);
     }
 }
 
@@ -118,7 +123,9 @@ fn printSymtable(coff: Coff) !void {
     const writer = io.getStdOut().writer();
     try writer.writeAll("\nSymbol table:\n");
 
-    for (coff.symbols.items) |symbol, index| {
+    var index: u32 = 0;
+    while (index < coff.symbols.items.len) : (index += 1) {
+        const symbol = coff.symbols.items[index];
         try writer.print("[{d: >3}](sec {d})(ty {x: >4})(scl {d: >3}) 0x{x:0>16} {s}\n", .{
             index,
             symbol.section_number,
@@ -127,5 +134,25 @@ fn printSymtable(coff: Coff) !void {
             symbol.value,
             symbol.getName(&coff),
         });
+        index += symbol.number_aux_symbols; // skip auxiliary symbols
+    }
+}
+
+fn printRelocs(coff: Coff) !void {
+    const writer = io.getStdOut().writer();
+    try writer.writeAll("\nRelocations:\n");
+
+    var it = coff.relocations.iterator();
+    while (it.next()) |entry| {
+        const section_header = coff.section_table.items[entry.key_ptr.*];
+
+        for (entry.value_ptr.*) |relocation| {
+            try writer.print("{s: >13} {x:0>16} {x:0>4} {s}\n", .{
+                section_header.getName(&coff),
+                relocation.virtual_address,
+                relocation.tag,
+                coff.symbols.items[relocation.symbol_table_index].getName(&coff),
+            });
+        }
     }
 }
