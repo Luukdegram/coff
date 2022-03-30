@@ -23,7 +23,7 @@ const usage =
     \\
     \\Options:
     \\-H, --help                         Print this help and exit
-    \\-h, --headers                      Print the file headers of the object file
+    \\-h, --headers                      Print the section headers of the object file
     \\-t, --syms                         Print the symbol table
 ;
 
